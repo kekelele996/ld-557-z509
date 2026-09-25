@@ -37,6 +37,13 @@ export class TransactionsService {
 
   create(holdingId: number, dto: CreateTransactionDto, user: CurrentUser) {
     const holding = this.holdingsService.findOwned(holdingId, user);
+
+    // 入账前风险检查：买入/加仓会改变单一资产占比，卖出与分红不检查（已超限也允许减仓）。
+    // 超限时抛出异常，此时交易尚未写入，持仓与组合市值保持原样。
+    if (dto.type === TransactionType.BUY) {
+      this.holdingsService.assertBuyConcentration(holdingId, dto.quantity, dto.price, user);
+    }
+
     const transaction: TransactionRecord = {
       id: this.nextId++,
       holdingId,

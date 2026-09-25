@@ -58,7 +58,7 @@ FinanceAPI 是面向个人投资者的纯后端 API 服务，覆盖投资组合�
 | 枚举 | 定义位置 | 使用位置 |
 |---|---|---|
 | PortfolioType | `backend/src/constants/enums.ts` | `modules/portfolios/entities/portfolio.entity.ts`、`modules/portfolios/dto/create-portfolio.dto.ts`、`modules/portfolios/portfolios.service.ts`、`database/migrations/1710000000000-init-financeapi.ts`、`database/seeds/seed.ts` |
-| RiskLevel | `backend/src/constants/enums.ts` | `modules/portfolios/entities/portfolio.entity.ts`、`modules/portfolios/dto/create-portfolio.dto.ts`、`modules/portfolios/portfolios.service.ts`、`database/migrations/1710000000000-init-financeapi.ts`、`database/seeds/seed.ts` |
+| RiskLevel | `backend/src/constants/enums.ts` | `constants/risk-limits.ts`、`modules/portfolios/entities/portfolio.entity.ts`、`modules/portfolios/dto/create-portfolio.dto.ts`、`modules/portfolios/portfolios.service.ts`、`modules/portfolios/portfolios.controller.ts`、`modules/risk/risk.service.ts`、`modules/risk/exceptions/concentration-limit.exception.ts`、`modules/holdings/holdings.service.ts`、`modules/holdings/holdings.module.ts`、`modules/transactions/transactions.service.ts`、`database/migrations/1710000000000-init-financeapi.ts`、`database/seeds/seed.ts` |
 | TransactionType | `backend/src/constants/enums.ts` | `modules/transactions/entities/transaction.entity.ts`、`modules/transactions/dto/create-transaction.dto.ts`、`modules/transactions/transactions.service.ts`、`database/migrations/1710000000000-init-financeapi.ts`、`database/seeds/seed.ts` |
 | AssetStatus | `backend/src/constants/enums.ts` | `modules/market/entities/market-data.entity.ts`、`modules/market/market.service.ts`、`database/migrations/1710000000000-init-financeapi.ts` |
 | UserRole | `backend/src/constants/enums.ts` | `modules/auth/entities/user.entity.ts`、`modules/auth/dto/register.dto.ts`、`modules/auth/strategies/jwt.strategy.ts`、`common/guards/roles.guard.ts`、`constants/permissions.ts`、`database/seeds/seed.ts` |
@@ -82,6 +82,31 @@ FinanceAPI 是面向个人投资者的纯后端 API 服务，覆盖投资组合�
 ## 操作日志
 
 `backend/src/common/interceptors/audit.interceptor.ts` 拦截 POST/PUT/PATCH/DELETE，记录用户、动作、目标路径、请求摘要、IP、UA。交易、删除组合、删除持仓等关键写操作都会进入审计服务。表结构见 `backend/src/modules/audit/entities/audit-log.entity.ts`。
+
+## 单一资产集中度风控
+
+交易入账前会按组合风险等级校验这笔交易完成后的持仓结构，规则常量维护在 `backend/src/constants/risk-limits.ts`，校验逻辑在 `backend/src/modules/risk/risk.service.ts`：
+
+| 风险等级 | 单一资产市值占比上限 |
+|---|---|
+| CONSERVATIVE 保守 | 30% |
+| MODERATE 稳健 | 50% |
+| AGGRESSIVE 激进 | 80% |
+
+- 买入/加仓（`POST /api/holdings/:holdingId/transactions` 的 `BUY`）和新增持仓（`POST /api/portfolios/:portfolioId/holdings`）在写入前模拟交易后的持仓结构：同一资产按代码合并后计算各资产市值占组合总市值的比例。
+- 任一资产超过上限时，这笔记账失败（HTTP 400，`errorCode: SINGLE_ASSET_LIMIT_EXCEEDED`），响应 `details` 与 `message` 中包含具体资产代码、交易后占比与上限；交易不会写入，持仓数量/均价与组合总市值保持原样。
+- 卖出（SELL）与分红（DIVIDEND）不做集中度检查，因此已经超限的组合仍可卖出或减仓。
+- 组合详情 `GET /api/portfolios/:id` 额外回读 `singleAssetLimit`（当前风险上限）、`overLimit`（是否已超限）和 `concentration`（组合总市值与各资产的市值、占比、是否超限明细）。
+
+```json
+{
+  "statusCode": 400,
+  "message": "资产 AAPL 交易后占比 100.00%，超过MODERATE风险等级单一资产上限 50%",
+  "error": "BadRequestException",
+  "errorCode": "SINGLE_ASSET_LIMIT_EXCEEDED",
+  "details": { "symbol": "AAPL", "riskLevel": "MODERATE", "limit": 0.5, "weight": 1, "marketValue": 2147.2, "totalValue": 2147.2 }
+}
+```
 
 ## Redis 缓存策略
 

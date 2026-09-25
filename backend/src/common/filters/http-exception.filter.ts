@@ -10,13 +10,21 @@ export class HttpExceptionFilter implements ExceptionFilter {
     const statusCode = exception.getStatus();
     const payload = exception.getResponse();
 
-    response.status(statusCode).json({
+    const body: Record<string, unknown> = {
       statusCode,
       message: typeof payload === 'string' ? payload : (payload as { message?: unknown }).message,
       error: exception.name,
       timestamp: new Date().toISOString(),
       path: request.url,
-    });
+    };
+
+    // 透传业务异常携带的结构化信息（如集中度超限的具体资产）
+    if (typeof payload === 'object' && payload !== null) {
+      const { errorCode, details } = payload as { errorCode?: unknown; details?: unknown };
+      if (errorCode !== undefined) body.errorCode = errorCode;
+      if (details !== undefined) body.details = details;
+    }
+
+    response.status(statusCode).json(body);
   }
 }
-
