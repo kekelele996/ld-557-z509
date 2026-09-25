@@ -1,4 +1,6 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
+import { ConcentrationLimitException } from '../../common/exceptions/concentration-limit.exception';
+import { CONCENTRATION_EPSILON, RISK_CONCENTRATION_LIMITS } from '../../constants/risk-limits';
 import { CurrentUser } from '../../types/request';
 import { CreateHoldingDto } from './dto/create-holding.dto';
 import { MarketService } from '../market/market.service';
@@ -40,6 +42,7 @@ export class HoldingsService {
 
   create(portfolioId: number, dto: CreateHoldingDto, user: CurrentUser) {
     this.portfoliosService.findOwned(portfolioId, user);
+    this.assertBuyWithinConcentrationLimit(portfolioId, dto.symbol, dto.quantity, user);
     const currentPrice = this.marketService.currentPrice(dto.symbol);
     const holding: HoldingRecord = {
       id: this.nextId++,
@@ -76,6 +79,69 @@ export class HoldingsService {
     this.revalue(holding);
     this.recomputePortfolioValue(holding.portfolioId);
     return holding;
+  }
+
+  /**
+   * 买入/新增持仓入账前的集中度检查：按组合风险等级上限（保守30%/稳健50%/激进80%）
+   * 校验交易完成后的持仓结构。买入某资产只会推高该资产自身的占比（分母变大，
+   * 其他资产占比只会下降），因此只需断言被买入资产交易后的权重；
+   * 已超限的其他资产不拦截，组合仍可卖出、减仓或买入其他资产再平衡。
+   * 本方法在任何写入之前调用，抛异常时持仓与组合市值保持原样。
+   */
+  assertBuyWithinConcentrationLimit(portfolioId: number, symbol: string, addedQuantity: number, user: CurrentUser) {
+    const portfolio = this.portfoliosService.findOwned(portfolioId, user);
+    const limit = RISK_CONCENTRATION_LIMITS[portfolio.riskLevel];
+    const target = symbol.toUpperCase();
+    const addedPrice = this.marketService.currentPrice(target);
+
+    let totalAfter = addedQuantity * addedPrice;
+    let targetValueAfter = addedQuantity * addedPrice;
+    for (const holding of this.holdings.filter((item) => item.portfolioId === portfolioId)) {
+      const value = holding.quantity * this.marketService.currentPrice(holding.symbol);
+      totalAfter += value;
+      if (holding.symbol === target) targetValueAfter += value;
+    }
+
+    const weightAfter = totalAfter === 0 ? 0 : targetValueAfter / totalAfter;
+    if (weightAfter > limit + CONCENTRATION_EPSILON) {
+      throw new ConcentrationLimitException(target, weightAfter, limit, portfolio.riskLevel);
+    }
+  }
+
+  /**
+   * 组合集中度回读：当前风险等级对应的单一资产上限、各资产市值权重、
+   * 是否超限以及超限资产列表。供组合详情展示。
+   */
+  concentrationStatus(portfolioId: number, user: CurrentUser) {
+    const portfolio = this.portfoliosService.findOwned(portfolioId, user);
+    const limit = RISK_CONCENTRATION_LIMITS[portfolio.riskLevel];
+
+    const valueBySymbol = new Map<string, number>();
+    let totalValue = 0;
+    for (const holding of this.holdings.filter((item) => item.portfolioId === portfolioId)) {
+      const value = holding.quantity * this.marketService.currentPrice(holding.symbol);
+      valueBySymbol.set(holding.symbol, (valueBySymbol.get(holding.symbol) ?? 0) + value);
+      totalValue += value;
+    }
+
+    const weights = [...valueBySymbol.entries()].map(([symbol, value]) => {
+      const weight = totalValue === 0 ? 0 : value / totalValue;
+      return {
+        symbol,
+        value: Number(value.toFixed(2)),
+        weight: Number(weight.toFixed(4)),
+        exceeded: weight > limit + CONCENTRATION_EPSILON,
+      };
+    });
+
+    return {
+      riskLevel: portfolio.riskLevel,
+      maxSingleAssetWeight: limit,
+      exceeded: weights.some((item) => item.exceeded),
+      totalValue: Number(totalValue.toFixed(2)),
+      weights,
+      breaches: weights.filter((item) => item.exceeded),
+    };
   }
 
   private revalueAll(items: HoldingRecord[]) {

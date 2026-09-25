@@ -40,7 +40,7 @@ FinanceAPI 是面向个人投资者的纯后端 API 服务，覆盖投资组合�
 | Auth | POST | `/api/auth/refresh` | 刷新 token |
 | Auth | GET | `/api/auth/profile` | 当前用户 |
 | Portfolio | GET/POST | `/api/portfolios` | 列表、创建 |
-| Portfolio | GET/PUT/DELETE | `/api/portfolios/:id` | 详情、编辑、删除 |
+| Portfolio | GET/PUT/DELETE | `/api/portfolios/:id` | 详情（含集中度回读）、编辑、删除 |
 | Portfolio | GET | `/api/portfolios/:id/performance` | 收益统计 |
 | Holding | GET/POST | `/api/portfolios/:portfolioId/holdings` | 组合持仓 |
 | Holding | GET/DELETE | `/api/holdings/:id` | 持仓详情、删除 |
@@ -52,6 +52,20 @@ FinanceAPI 是面向个人投资者的纯后端 API 服务，覆盖投资组合�
 | Market | GET | `/api/market/trending` | 热门资产 |
 | Review | GET/POST | `/api/portfolios/:portfolioId/reviews` | 复盘列表、创建 |
 | Review | PUT/DELETE | `/api/reviews/:id` | 编辑、删除复盘 |
+
+## 交易前集中度风控
+
+买入/新增持仓入账前，按组合风险等级校验交易完成后的持仓结构（单一资产市值占组合总市值上限，常量定义在 `backend/src/constants/risk-limits.ts`）：
+
+| 风险等级 | 单一资产上限 |
+|---|---|
+| CONSERVATIVE 保守 | 30% |
+| MODERATE 稳健 | 50% |
+| AGGRESSIVE 激进 | 80% |
+
+- 加仓使被买入资产占比超过上限时，整笔记账失败，返回 `422` 及具体资产（`symbol`、`weightAfter`、`limit`、`riskLevel`），交易记录、持仓与组合市值均保持原样。
+- 卖出/减仓与分红不拦截：已超限的组合仍可减仓，也可买入其他资产再平衡（买入只会推高被买入资产自身的占比）。
+- 组合详情 `GET /api/portfolios/:id` 的 `concentration` 字段回读当前风险上限（`maxSingleAssetWeight`）、是否超限（`exceeded`）、各资产权重（`weights`）与超限资产列表（`breaches`）。
 
 ## 枚举使用位置清单
 

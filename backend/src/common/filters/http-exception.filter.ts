@@ -9,10 +9,11 @@ export class HttpExceptionFilter implements ExceptionFilter {
     const request = ctx.getRequest<Request>();
     const statusCode = exception.getStatus();
     const payload = exception.getResponse();
+    const body = typeof payload === 'string' ? { message: payload } : (payload as Record<string, unknown>);
 
     response.status(statusCode).json({
       statusCode,
-      message: typeof payload === 'string' ? payload : (payload as { message?: unknown }).message,
+      ...body,
       error: exception.name,
       timestamp: new Date().toISOString(),
       path: request.url,
